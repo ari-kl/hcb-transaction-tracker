@@ -1,0 +1,19 @@
+name = "worker-rust"
+main = "build/worker/shim.mjs"
+compatibility_date = "2023-12-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[env.dev]
+build = { command = "cargo install -q worker-build && worker-build --dev" }
+
+[vars]
+HCB_ORG_ID = "arcade"
+
+[[kv_namespaces]]
+binding = "HCB_TRANSACTIONS"
+id = "57dda525c14b4cf4b3d13d51de41c4da"
