@@ -50,8 +50,24 @@ async fn check_for_updates(env: Env) -> Result<String> {
                 return Ok("No new transactions".to_string());
             } else {
                 for transaction in transactions.iter() {
+                    // Stop when we reach the last stored transaction
                     if transaction.id == id {
                         break;
+                    }
+
+                    // Sometimes transaction order can change, so we need to check if it's already been seen
+                    let Ok(new_transaction) = kv.get(&transaction.id).text().await else {
+                        continue;
+                    };
+
+                    match new_transaction {
+                        Some(_) => continue,
+                        None => kv
+                            .put(&transaction.id, "true")
+                            .unwrap()
+                            .execute()
+                            .await
+                            .unwrap(),
                     }
 
                     let transaction_link_url = format!(
