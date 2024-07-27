@@ -37,92 +37,71 @@ async fn check_for_updates(env: Env) -> Result<String> {
         .as_str(),
     )?;
     let slack_webhook_url = env.secret("SLACK_WEBHOOK_URL")?.to_string();
-
     let transactions = fetch_transactions(hcb_api_url).await?;
-
-    let last_stored_id = kv.get("latest").text().await.unwrap();
-    let latest = transactions.first().unwrap();
     let client = Client::new();
 
-    match last_stored_id {
-        Some(id) => {
-            if id == latest.id {
-                return Ok("No new transactions".to_string());
-            } else {
-                for transaction in transactions.iter() {
-                    // Stop when we reach the last stored transaction
-                    if transaction.id == id {
-                        break;
-                    }
+    let mut new_transaction_ids: Vec<String> = Vec::new();
 
-                    // Sometimes transaction order can change, so we need to check if it's already been seen
-                    let Ok(new_transaction) = kv.get(&transaction.id).text().await else {
-                        continue;
-                    };
+    for transaction in transactions.iter() {
+        // Skip transaction if already seen
+        let Ok(new_transaction) = kv.get(&transaction.id).text().await else {
+            continue;
+        };
 
-                    match new_transaction {
-                        Some(_) => continue,
-                        None => kv
-                            .put(&transaction.id, "true")
-                            .unwrap()
-                            .execute()
-                            .await
-                            .unwrap(),
-                    }
+        match new_transaction {
+            Some(_) => continue,
+            None => kv
+                .put(&transaction.id, "true")
+                .unwrap()
+                .execute()
+                .await
+                .unwrap(),
+        }
 
-                    let transaction_link_url = format!(
-                        "https://hcb.hackclub.com/hcb/{}",
-                        transaction.clone().id.split_off(4) // Cut off txn_ prefix
-                    );
+        let transaction_link_url = format!(
+            "https://hcb.hackclub.com/hcb/{}",
+            transaction.clone().id.split_off(4) // Cut off txn_ prefix
+        );
 
-                    let mut message = format!(
-                        "*<{}|NEW TRANSACTION>*
+        let mut message = format!(
+            "*<{}|NEW TRANSACTION>*
 *Date*: {}
 *Memo*: {}
 *Balance Change*: ${}",
-                        transaction_link_url,
-                        transaction.date,
-                        transaction.memo,
-                        transaction.amount_cents as f64 / 100.0
-                    );
+            transaction_link_url,
+            transaction.date,
+            transaction.memo,
+            transaction.amount_cents as f64 / 100.0
+        );
 
-                    if let Some(card_charge) = &transaction.card_charge {
-                        let card_charge_url = Url::parse(&card_charge.href)?;
-                        let response = client
-                            .get(card_charge_url)
-                            .header("User-Agent", USER_AGENT)
-                            .send()
-                            .await
-                            .unwrap();
+        if let Some(card_charge) = &transaction.card_charge {
+            let card_charge_url = Url::parse(&card_charge.href)?;
+            let response = client
+                .get(card_charge_url)
+                .header("User-Agent", USER_AGENT)
+                .send()
+                .await
+                .unwrap();
 
-                        let card_charge: CardCharge =
-                            serde_json::from_str(&response.text().await.unwrap())?;
-                        let user = &card_charge.user;
+            let card_charge: CardCharge = serde_json::from_str(&response.text().await.unwrap())?;
+            let user = &card_charge.user;
 
-                        message += &format!("\n*User*: {}", user.full_name);
-                    }
-
-                    let request_body = &json!({ "text": message });
-
-                    client
-                        .post(&slack_webhook_url)
-                        .body(request_body.to_string())
-                        .send()
-                        .await
-                        .unwrap();
-                }
-
-                kv.put("latest", latest.clone().id)
-                    .unwrap()
-                    .execute()
-                    .await
-                    .unwrap();
-
-                Ok("New transactions found".to_string())
-            }
+            message += &format!("\n*User*: {}", user.full_name);
         }
-        None => Err("No last stored ID found".into()),
+
+        let request_body = &json!({ "text": message });
+
+        client
+            .post(&slack_webhook_url)
+            .body(request_body.to_string())
+            .send()
+            .await
+            .unwrap();
+
+        new_transaction_ids.push(transaction.id.clone());
     }
+
+    Ok("New transactions: ".to_string() + &new_transaction_ids.join(", "))
 }
 
 async fn fetch_transactions(url: Url) -> Result<Transactions> {
